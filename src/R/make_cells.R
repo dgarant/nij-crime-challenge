@@ -51,7 +51,7 @@ gArea(valid.cells)  / (5280 * 5280)
 ggplot(area.districts, aes(x=long, y=lat, group=group)) + geom_polygon() + 
     geom_polygon(data=valid.cells, aes(x=long, y=lat, group=group), alpha=0.5, fill="red", color="black", size=0.5)
 
-poly.ids <- as.character(1:length(valid.cells))
+poly.ids <- as.character(0:(length(valid.cells)-1))
 valid.cells.renamed <- spChFIDs(valid.cells, poly.ids)
 cell.areas <- laply(valid.cells.renamed@polygons, function(p) {
   sum(laply(p@Polygons, function(p) { if (p@hole) -p@area else p@area }))
@@ -60,3 +60,18 @@ cell.areas <- laply(valid.cells.renamed@polygons, function(p) {
 valid.cells.df <- SpatialPolygonsDataFrame(valid.cells.renamed, 
                                            data.frame(id=poly.ids, area=cell.areas, row.names=poly.ids))
 writePolyShape(valid.cells.df, paste0("../../models/cells/cells-dim-", cell.dimension.ft))
+
+
+adjacencies <- gTouches(valid.cells.df, byid=TRUE, returnDense=FALSE)
+adj.df <- adply(names(adjacencies), 1, function(name) { 
+  cur.adjs <- adjacencies[[name]]
+  if(length(cur.adjs) == 0) {
+    return(NULL)
+  } else {
+    return(data.frame(a=as.integer(name), b=cur.adjs))
+  }
+})
+adj.df <- subset(adj.df, select=-X1)
+adj.df <- adj.df[!duplicated(adj.df), ]
+write.csv(adj.df, paste0("../../models/cells/cells-dim-", cell.dimension.ft, "-adjacencies.csv"))
+write.csv(data.frame(id=poly.ids), paste0("../../models/cells/cells-dim-", cell.dimension.ft, "-ids.csv"))
