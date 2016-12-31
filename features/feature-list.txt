@@ -1,0 +1,58 @@
+Outcome variables:
+    cell id
+    forecast start date (sd)
+    crime category
+    1wk crime counts
+    2wk crime counts
+    1mo crimes
+    2mo crimes
+    3mo crimes
+    
+Predictors:
+    Start month (binarized)
+    Crime counts by category:
+        Daily:
+            sd - 1 day (try with/without)
+            sd - 2 day (try with/without)
+            sd - 3 day
+            sd - 4 day
+            sd - 5 day
+            sd - 6 day
+            sd - 7 day
+        Weekly:
+            sd - 4wk (30-24 days ago)
+            sd - 3wk (23-17 days ago)
+            sd - 2wk (16-10 days ago)
+            sd - 1wk (9-3 days ago)
+        Monthly:
+            sd - 4mo (122-93 days ago)
+            sd - 3mo (92-63 days ago)
+            sd - 2mo (62-33 days ago)
+            sd - 1mo (32-3 days ago)
+            
+        Last year:
+            1wk window from sd
+            2wk window from sd
+            1mo window from sd
+            2mo window from sd
+            
+    Weather:
+        mean hrs sunlight within 1wk, 2wk, 1mo, 2mo, 3mo window from sd
+        # rainy days forecast within 1wk, 2wk, 1mo, 2mo, 3mo window from sd
+        median low forecast within windows
+        median high forecast within windows
+        1mo low temp trend prior to sd
+        1mo high temp trend prior to sd
+        2mo snow counts
+        1mo snow counts
+        
+    Events:
+        event type
+        # events in window
+    
+    Day Structure:
+        # Fridays, Saturdays, Sundays, etc within 1wk, 2wk, 1mo window of sd
+    
+        
+        
+            

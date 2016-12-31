@@ -5,6 +5,7 @@ import calendar
 import datetime
 from dateutil import parser as dparser
 from dateutil.relativedelta import relativedelta
+import sys, psutil, gc, os
 
 cell_dimension = 550
 
@@ -34,7 +35,23 @@ category_abbrevs = {
 }
 crime_categories = set(category_abbrevs.values())
 outcome_categories = set(["BURGLARY", "MOTOR VEHICLE THEFT", "STREET CRIMES", "OTHER"])
-outcome_index = defaultdict(lambda: dict(zip(outcome_categories, [0] * 4)))
+outcome_index = defaultdict(lambda: defaultdict(int))
+
+def report_memory_usage():
+    rss = psutil.Process(os.getpid()).memory_info().rss
+    # Dump variables if using more than 100MB of memory
+
+    def memory_dump():
+        for obj in gc.get_objects():
+            i = id(obj)
+            size = sys.getsizeof(obj, 0)
+            #    referrers = [id(o) for o in gc.get_referrers(obj) if hasattr(o, '__class__')]
+            referents = [id(o) for o in gc.get_referents(obj) if hasattr(o, '__class__')]
+            if hasattr(obj, '__class__') and size > 1024 * 1024:
+                cls = str(obj.__class__)
+                print("id: {0}, class: {1}, size: {2}".format(i, cls, size))
+                
+    memory_dump()
 
 with gzip.open("../../features/raw_crimes_cells_{0}.csv.gz".format(cell_dimension)) as gzfile:
     reader = csv.DictReader(gzfile)
@@ -47,7 +64,7 @@ with gzip.open("../../features/raw_crimes_cells_{0}.csv.gz".format(cell_dimensio
         if start_date is None or row["occ_date"] < start_date:
             start_date = row["occ_date"]
         if end_date is None or row["occ_date"] > end_date:
-            end_date = row["occ_date"]
+            end_date = row["occ_date"]   
        
 # Generates all dates between from_date and to_date, inclusive
 def date_generator(from_date, to_date):
@@ -55,17 +72,15 @@ def date_generator(from_date, to_date):
         yield from_date
         from_date = from_date + datetime.timedelta(days=1)      
    
-
 def crimes_in_window(cellid, start_date, end_date, cindex):
     crime_dict = defaultdict(int)
     for d in date_generator(start_date, end_date):
         str_d = d.isoformat()
-        for category, val in cindex[(cellid, str_d)].items():
-            crime_dict[category] += val
+        if (cellid, str_d) in cindex:
+            for category in cindex[(cellid, str_d)]:
+                crime_dict[category] += cindex[(cellid, str_d)][category]
     return crime_dict  
-        
-features = []
-
+      
 with gzip.open("../../features/full-features.csv.gz", "w+") as feature_file:
     for forecast_start in date_generator(dparser.parse(start_date).date(), dparser.parse(end_date).date()):
         # try to eliminate some autocorrelation by 
@@ -75,6 +90,8 @@ with gzip.open("../../features/full-features.csv.gz", "w+") as feature_file:
             
         writer = None
             
+        print("{0}: Working on date {1}".format(datetime.datetime.now().isoformat(), forecast_start.isoformat()))
+        
         for cellid in cell_ids:
             cur_features = OrderedDict()
             cur_features["cell_id"] = cellid
@@ -148,5 +165,6 @@ with gzip.open("../../features/full-features.csv.gz", "w+") as feature_file:
                 writer = csv.DictWriter(feature_file, fieldnames=cur_features.keys())
                 writer.writeheader()
             writer.writerow(cur_features)
+        gc.collect()
             #for key, val in cur_features.items():
             #    print("{0}: {1}".format(key, val))
