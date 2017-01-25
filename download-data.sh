@@ -11,6 +11,7 @@ wget -4 https://www.nij.gov/documents/crime-forecasting-challenge/010114_123114_
 wget -4 https://www.nij.gov/documents/crime-forecasting-challenge/010113_123113_Data.zip
 wget -4 https://www.nij.gov/documents/crime-forecasting-challenge/030112_123112_Data.zip
 wget -4 https://www.nij.gov/Documents/crime-forecasting-challenge/EXAMPLE_SUBMISSION.zip
+wget -4 https://calendar.travelportland.com/calendar.xml
 
 for f in *.zip; do
     unzip $f;
