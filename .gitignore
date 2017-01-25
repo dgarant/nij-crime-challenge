@@ -1,4 +1,7 @@
 data 
 .Rhistory
 *.un~
+target
+*.swp
+.ipynb_checkpoints
 

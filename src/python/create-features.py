@@ -5,12 +5,13 @@ import calendar
 import datetime
 from dateutil import parser as dparser
 from dateutil.relativedelta import relativedelta
-import sys, psutil, gc, os
+import sys, os
 
 cell_dimension = 550
+DAY_WINDOWS = [7, 14, 30, 61, 91]
 
 cell_ids = set()
-with open("../../models/cells/cells-dim-{0}-ids.csv".format(cell_dimension), "r") as handle:
+with open("../../models/cells/cells-dim-{0}-meta.csv".format(cell_dimension), "r") as handle:
     reader = csv.DictReader(handle)
     for row in reader:
         cell_ids.add(row["id"])
@@ -18,8 +19,8 @@ with open("../../models/cells/cells-dim-{0}-ids.csv".format(cell_dimension), "r"
 # (cellid, date) -> (category) -> count
 cell_count_index = defaultdict(lambda: defaultdict(int))
 
-start_date = None
-end_date = None
+data_start_date = None
+data_end_date = None
 category_abbrevs = {
     "BURGLARY-PROPERTY CRIME" : "burg_prop",
     "BURGLARY-SUSPICIOUS" : "burg_susp",
@@ -34,24 +35,8 @@ category_abbrevs = {
     "STREET CRIMES-PERSON CRIME" : "street_person"
 }
 crime_categories = set(category_abbrevs.values())
-outcome_categories = set(["BURGLARY", "MOTOR VEHICLE THEFT", "STREET CRIMES", "OTHER"])
+outcome_categories = set(["BURGLARY", "MOTOR VEHICLE THEFT", "STREET CRIMES", "ALL"])
 outcome_index = defaultdict(lambda: defaultdict(int))
-
-def report_memory_usage():
-    rss = psutil.Process(os.getpid()).memory_info().rss
-    # Dump variables if using more than 100MB of memory
-
-    def memory_dump():
-        for obj in gc.get_objects():
-            i = id(obj)
-            size = sys.getsizeof(obj, 0)
-            #    referrers = [id(o) for o in gc.get_referrers(obj) if hasattr(o, '__class__')]
-            referents = [id(o) for o in gc.get_referents(obj) if hasattr(o, '__class__')]
-            if hasattr(obj, '__class__') and size > 1024 * 1024:
-                cls = str(obj.__class__)
-                print("id: {0}, class: {1}, size: {2}".format(i, cls, size))
-                
-    memory_dump()
 
 with gzip.open("../../features/raw_crimes_cells_{0}.csv.gz".format(cell_dimension)) as gzfile:
     reader = csv.DictReader(gzfile)
@@ -61,10 +46,10 @@ with gzip.open("../../features/raw_crimes_cells_{0}.csv.gz".format(cell_dimensio
         ["CATEGORY2"]]] += 1
         outcome_index[(row["id"], row["occ_date"])][row["CATEGORY"]] += 1
         
-        if start_date is None or row["occ_date"] < start_date:
-            start_date = row["occ_date"]
-        if end_date is None or row["occ_date"] > end_date:
-            end_date = row["occ_date"]   
+        if data_start_date is None or row["occ_date"] < data_start_date:
+            data_start_date = row["occ_date"]
+        if data_end_date is None or row["occ_date"] > data_end_date:
+            data_end_date = row["occ_date"]   
        
 # Generates all dates between from_date and to_date, inclusive
 def date_generator(from_date, to_date):
@@ -73,22 +58,29 @@ def date_generator(from_date, to_date):
         from_date = from_date + datetime.timedelta(days=1)      
    
 def crimes_in_window(cellid, start_date, end_date, cindex):
+    if start_date < data_start_date or end_date > data_end_date:
+        crime_dict = defaultdict(lambda: None)
+        return crime_dict
+
     crime_dict = defaultdict(int)
     for d in date_generator(start_date, end_date):
         str_d = d.isoformat()
         if (cellid, str_d) in cindex:
             for category in cindex[(cellid, str_d)]:
                 crime_dict[category] += cindex[(cellid, str_d)][category]
+                crime_dict["ALL"] += crime_dict[category]
     return crime_dict  
       
-with gzip.open("../../features/full-features.csv.gz", "w+") as feature_file:
-    for forecast_start in date_generator(dparser.parse(start_date).date(), dparser.parse(end_date).date()):
+data_start_date = dparser.parse(data_start_date).date()
+data_end_date = dparser.parse(data_end_date).date()
+
+writer = None
+with gzip.open("../../features/count-features-{0}.csv.gz".format(cell_dimension), "w+") as feature_file:
+    for forecast_start in date_generator(data_start_date + relativedelta(years=1), data_end_date):
         # try to eliminate some autocorrelation by 
         # keeping only the 1st and 15th as starting dates
         if forecast_start.day != 1 and forecast_start.day != 15:
             continue
-            
-        writer = None
             
         print("{0}: Working on date {1}".format(datetime.datetime.now().isoformat(), forecast_start.isoformat()))
         
@@ -102,7 +94,7 @@ with gzip.open("../../features/full-features.csv.gz", "w+") as feature_file:
                     cur_features["outcome_num_crimes_{0}_{1}".format(time_window, category)] = outcome_dict[category]
             
             # outcomes
-            for day_window in [7, 14, 30, 61]:
+            for day_window in DAY_WINDOWS:
                 edate = forecast_start + datetime.timedelta(days=day_window)
                 cur_outcomes = crimes_in_window(cellid, forecast_start, edate, outcome_index)
                 store_outcomes(cur_outcomes, "{0}days".format(day_window))
@@ -133,13 +125,13 @@ with gzip.open("../../features/full-features.csv.gz", "w+") as feature_file:
                 
             # last year's values  
             py_start_date = forecast_start - relativedelta(years=1)
-            for day_window in [7, 14, 30, 61]:
+            for day_window in DAY_WINDOWS:
                 py_end = py_start_date + datetime.timedelta(days=6)
                 py_outcomes = crimes_in_window(cellid, py_start_date, py_end, cell_count_index)
                 store_count_features(py_outcomes, "py{0}days".format(day_window))
             
             # day structure
-            for day_window in [7, 14, 30, 61]:
+            for day_window in DAY_WINDOWS:
                 window_end = forecast_start + datetime.timedelta(days=day_window)
                 num_thursdays = 0
                 num_fridays = 0
@@ -160,11 +152,11 @@ with gzip.open("../../features/full-features.csv.gz", "w+") as feature_file:
                 cur_features["num_tuesdays_next{0}days".format(day_window)] = num_tuesdays
                 
             # TODO: weather, events
+            # https://calendar.travelportland.com/calendar.xml
             
             if not writer:
                 writer = csv.DictWriter(feature_file, fieldnames=cur_features.keys())
                 writer.writeheader()
             writer.writerow(cur_features)
-        gc.collect()
             #for key, val in cur_features.items():
             #    print("{0}: {1}".format(key, val))
