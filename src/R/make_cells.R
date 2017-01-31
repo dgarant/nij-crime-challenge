@@ -56,7 +56,7 @@ cat("Area of districts: ", gArea(districts) / (5280 * 5280), "\n")
 cat("Area of valid cells: ", gArea(valid.cells)  / (5280 * 5280), "\n")
 
 cat("Converting polygons to data frame\n")
-area.cells <- fortify(polygon.struct)
+area.cells <- fortify(valid.cells)
 
 ggplot(area.districts, aes(x=long, y=lat, group=group)) + geom_polygon() + 
     geom_polygon(data=valid.cells, aes(x=long, y=lat, group=group), alpha=0.5, fill="red", color="black", size=0.5)
@@ -111,8 +111,13 @@ for(f in data.files) {
   }
 }
 
+
 crimes.by.cell <- over(crimes, valid.cells.df)
 crimes.by.cell$category <- crimes@data$CATEGORY
+
+raw.crime.cells <- subset(cbind(crimes@data, crimes.by.cell[, "id", drop=FALSE]), !is.na(id))
+write.csv(raw.crime.cells, file=gzfile(paste0("../../features/raw_crimes_cells_", cell.dimension.ft, ".csv.gz")))
+
 crime.counts.by.cell <- ddply(crimes.by.cell, .(id), summarize, num.crimes=length(id))
 
 library(GGally) 
@@ -156,3 +161,9 @@ for(cur.id in id.sample) {
   g <- ggplot(crime.meta, aes(x=x, y=y, color=type)) + geom_point() + labs(title=cur.id)
   print(g)
 }
+
+groups <- read.csv("../../models/mrf/param_groups.csv")
+c2 <- merge(area.cells, groups, by.x="id", by.y="cellid", suffixes=c("", ".g"), all.x=TRUE)
+c2 <- c2[order(c2$group, c2$order), ]
+ggplot(c2, aes(x=long, y=lat, group=group, fill=factor(group.g))) + geom_polygon() + guides(color="none")
+

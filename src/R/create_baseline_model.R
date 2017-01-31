@@ -38,7 +38,8 @@ ggplot(area.cells.meta, aes(x=long, y=lat, group=group, fill=num.crimes)) + geom
 
 write.model <- function(path, crime.counts, num.hotspots=30) {
   hotspot.ids <- crime.counts[order(-crime.counts$num.crimes), ][1:num.hotspots, "id"]
-  cells@data$hotspot <- cells@data$id %in% hotspot.ids
+  cells@data <- subset(cells@data, select=c(id, area))
+  cells@data$hotspot <- as.integer(cells@data$id %in% hotspot.ids)
   writeSpatialShape(cells, path)
   
   handle <- file(paste0(path, ".prj"))
