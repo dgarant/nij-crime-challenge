@@ -3,5 +3,6 @@ data
 *.un~
 target
 *.swp
+.RData
 .ipynb_checkpoints
 
