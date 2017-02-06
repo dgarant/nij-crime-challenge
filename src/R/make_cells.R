@@ -55,9 +55,6 @@ valid.cells <- gIntersection(polygon.struct, study.area, byid=TRUE)
 cat("Area of districts: ", gArea(districts) / (5280 * 5280), "\n")
 cat("Area of valid cells: ", gArea(valid.cells)  / (5280 * 5280), "\n")
 
-cat("Converting polygons to data frame\n")
-area.cells <- fortify(valid.cells)
-
 ggplot(area.districts, aes(x=long, y=lat, group=group)) + geom_polygon() + 
     geom_polygon(data=valid.cells, aes(x=long, y=lat, group=group), alpha=0.5, fill="red", color="black", size=0.5)
 
@@ -95,6 +92,9 @@ valid.cells.data$area <- cell.areas
 
 valid.cells.df <- SpatialPolygonsDataFrame(valid.cells.renamed, valid.cells.data)
 writePolyShape(valid.cells.df, paste0("../../models/cells/cells-dim-", cell.dimension.ft))
+
+cat("Converting polygons to data frame\n")
+area.cells <- fortify(valid.cells.renamed)
 
 # cluster the cells by crime counts
 cat("Building cell clusters\n")
@@ -165,5 +165,5 @@ for(cur.id in id.sample) {
 groups <- read.csv("../../models/mrf/param_groups.csv")
 c2 <- merge(area.cells, groups, by.x="id", by.y="cellid", suffixes=c("", ".g"), all.x=TRUE)
 c2 <- c2[order(c2$group, c2$order), ]
-ggplot(c2, aes(x=long, y=lat, group=group, fill=factor(group.g))) + geom_polygon() + guides(color="none")
+ggplot(c2, aes(x=long, y=lat, group=group, fill=factor(group.g))) + geom_polygon() + guides(fill="none")
 
