@@ -61,7 +61,7 @@ write.model <- function(path, crime.counts, num.hotspots=30) {
 if(dir.exists("../../models/baseline")) {
   for(timeframe in c("1MO", "1WK", "2MO", "2WK", "3MO")) {
     dir.create(paste0("../../models/baseline/ACFS/", timeframe), showWarnings=FALSE)  
-    dir.create(paste0("../../models/baseline/Burg/", timeframe), showWarnings=FALSE)  
+    dir.create(paste0("../../models/baseline/Burg/", timeframe), showWarnings=FALSE)
     dir.create(paste0("../../models/baseline/SC/", timeframe), showWarnings=FALSE)  
     dir.create(paste0("../../models/baseline/TOA/", timeframe), showWarnings=FALSE)  
     

@@ -8,6 +8,8 @@ from dateutil.relativedelta import relativedelta
 import sys, os
 import pandas as pd
 import gzip
+import argparse
+import numpy as np
 
 cell_dimension = 550
 DAY_WINDOWS = [7, 14, 30, 61, 91]
@@ -29,6 +31,19 @@ def process(feature_file, job_id, njobs):
         reader = csv.DictReader(handle)
         for row in reader:
             cell_ids.add(row["id"])
+
+    # mapping iso-formatted date to weather info
+    weather_by_date = dict()
+    with open("../../features/weather-features.csv", "r") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            weather_by_date[row["date"]] = row
+    
+    labor_stats_by_date = dict()
+    with open("../../features/bls-features.csv", "r") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            labor_stats_by_date[row["date"]] = row
         
     # (cellid, date) -> (category) -> count
     cell_count_index = defaultdict(lambda: defaultdict(int))
@@ -74,14 +89,15 @@ def process(feature_file, job_id, njobs):
     data_start_date = dparser.parse(data_start_date).date()
     data_end_date = dparser.parse(data_end_date).date()
 
+    writer = None
     with gzip.open(feature_file, "w+") as handle:
         for cellid in sorted(cell_ids, key=lambda c: int(c)):
 
-            if int(cellid) % 100 == 0:
-                print("{0}: Working on cell {1}".format(datetime.datetime.now().isoformat(), cellid))
-
             if int(cellid) % njobs != job_id:
                 continue
+
+            if int(cellid) % (100 + job_id) == 0:
+                print("J{0} {1}: Working on cell {2}".format(job_id, datetime.datetime.now().isoformat(), cellid))
 
             for forecast_start in date_generator(data_start_date + relativedelta(years=1), data_end_date):
                 # try to eliminate some autocorrelation by 
@@ -129,7 +145,7 @@ def process(feature_file, job_id, njobs):
                     window_end = forecast_start + datetime.timedelta(days=-(delta_months * 30 + 3))
                     counts_by_category = crimes_in_window(cellid, window_start, window_end, cell_count_index)
                     store_count_features(counts_by_category, "{0}months_ago".format(delta_months+1))
-                    
+
                 # last year's values  
                 py_start_date = forecast_start - relativedelta(years=1)
                 for day_window in DAY_WINDOWS:
@@ -158,10 +174,48 @@ def process(feature_file, job_id, njobs):
                     cur_features["num_thursdays_next{0}days".format(day_window)] = num_thursdays
                     cur_features["num_tuesdays_next{0}days".format(day_window)] = num_tuesdays
                     
-                # TODO: weather, events
+
+                # weather:
+                for day_delta in [7, -7, -14, -30]:
+                    window_start, window_end = sorted([forecast_start, 
+                        forecast_start + datetime.timedelta(days=day_delta)])
+
+                    def agg_weather_stat(attname, aggfun, prefix):
+                        vals = []
+                        for d in date_generator(window_start, window_end):
+                            str_d = d.isoformat()
+                            vals.append(float(weather_by_date[str_d][attname]))
+
+                        cur_features["p_{0}_{1}_{2}{3}".format(
+                                prefix, attname, 
+                                "f" if day_delta > 0 else "h", abs(day_delta))] = aggfun(vals)
+
+                    agg_weather_stat("precip_intensity", sum, "total")
+                    agg_weather_stat("precip_intensity", np.mean, "mean")
+                    agg_weather_stat("precip_accumulation", sum, "total")
+                    agg_weather_stat("precip_accumulation", np.mean, "mean")
+                    agg_weather_stat("snow", sum, "num")
+                    agg_weather_stat("rain", sum, "num")
+                    agg_weather_stat("sunlight_hours", sum, "total")
+                    agg_weather_stat("high_temp", np.mean, "mean")
+                    agg_weather_stat("low_temp", np.mean, "mean")
+                    agg_weather_stat("cloud_cover", np.mean, "mean")
+                    agg_weather_stat("cloud_cover", sum, "total")
+
+                # labor statistics
+                cur_labor_stats = labor_stats_by_date[forecast_start.isoformat()]
+                cur_features["p_cur_wages"] = cur_labor_stats["wages"]
+                cur_features["p_cur_labor_force"] = cur_labor_stats["labor_force"]
+                cur_features["p_cur_employment"] = cur_labor_stats["employment"]
+                cur_features["p_cur_unemployment"] = cur_labor_stats["unemployment"]
+                
+                # TODO: events
                 # https://calendar.travelportland.com/calendar.xml
                 if not writer:
                     writer = csv.DictWriter(handle, fieldnames=cur_features.keys())
-                    writer.writeheader()
+                    if job_id == 0:
+                        writer.writeheader()
                 writer.writerow(cur_features)
 
+if __name__ == "__main__":
+    main()

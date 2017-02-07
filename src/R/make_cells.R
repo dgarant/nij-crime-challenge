@@ -128,8 +128,23 @@ valid.cells.center <- ldply(valid.cells.df@polygons, function(p) {
 valid.cells.center <- merge(valid.cells.center, valid.cells.df@data, by="id")
 crime.meta <- merge(valid.cells.center, crime.counts.by.cell, by="id", all.x=TRUE)
 crime.meta[is.na(crime.meta$num.crimes), "num.crimes"] <- 0
-ggplot(crime.meta, aes(x=x, y=y, color=num.crimes)) + 
-  geom_point(stroke=0, size=3) + scale_color_continuous(low="blue", high="red")
+
+
+theme_empty <- theme_bw()
+theme_empty$line <- element_blank()
+theme_empty$rect <- element_blank()
+theme_empty$strip.text <- element_blank()
+theme_empty$axis.text <- element_blank()
+theme_empty$plot.title <- element_blank()
+theme_empty$axis.title <- element_blank()
+theme_empty$plot.margin <- structure(c(0, 0, -1, -1), unit = "lines", valid.unit = 3L, class = "unit")
+
+crime.meta.polys <- merge(crime.meta, area.cells, by="id")
+crime.meta.polys <- crime.meta.polys[order(crime.meta.polys$group, crime.meta.polys$order),  ]
+
+ggplot(crime.meta.polys, aes(x=long, y=lat, fill=num.crimes, group=group)) + 
+  geom_polygon() + scale_fill_continuous(low="blue", high="red") + theme_empty + guides(fill="none")
+
 rownames(crime.meta) <- crime.meta$id
 write.table(subset(crime.meta, select=-coord), 
             paste0("../../models/cells/cells-dim-", cell.dimension.ft, "-meta.csv"), 
