@@ -31,7 +31,7 @@ def main():
 
     outcome_networks = dict()
     for outcome in OUTCOME_VARS:
-        print("Working on outcome {0}".format(outcome))
+        print("Working on {0}".format(outcome))
         outcome_networks[outcome] = build_network(meta, train_data, outcome, predictor_names, cell_models, param_groups, param_group_map)
 
     with open("../../models/mrf/mrf-structure.p", "w+") as handle:
@@ -48,9 +48,18 @@ def build_network(meta, train_data, outcome_var, predictor_names, cell_models, p
         #model = cell_models[cell_id][outcome_var]
         model = load_cell_potentials(cell_id, param_groups, param_group_map)[outcome_var]
         cell_meta = meta.loc[cell_id]
+        if cell_id % 100 == 0:
+            print("\tWorking on cell {0}".format(cell_id))
 
         cell_outcome_name = "{0}_{1}".format(cell_id, outcome_var)
-        cell_predictor_names = ["{0}_{1}".format(cell_id, p) for p in predictor_names]
+
+        cell_data = train_data.loc[cell_id]
+        cell_responses = cell_data[outcome_var]
+        domain = [np.min(cell_responses), np.max(cell_responses)]
+
+        variable_spec.append(plmrf.VariableDef(cell_outcome_name, ddomain=domain))
+
+        cell_predictor_names = ["{0}_{1}".format(cell_id, p) for p in transformed_predictor_names]
         
         # form connections to all cells with greater ids, 
         # to ensure they are created only once
@@ -73,14 +82,6 @@ def build_network(meta, train_data, outcome_var, predictor_names, cell_models, p
         potential_funs.append(new_potential)
         if cell_id in param_group_map:
             tied_weights[param_group_map[cell_id]].append(len(potential_funs) - 1)
-    
-        cell_data = train_data.loc[cell_id]
-        cell_responses = cell_data[outcome_var]
-        domain = [np.min(cell_responses), np.max(cell_responses)]
-
-        variable_spec.append(plmrf.VariableDef(cell_outcome_name, ddomain=domain))
-        for orig_name, cell_name in zip(predictor_names, cell_predictor_names):
-            variable_spec.append(plmrf.VariableDef(cell_name, samples=cell_data[orig_name]))
 
     network = plmrf.LogLinearMarkovNetwork(potential_funs, variable_spec, tied_weights)
     
@@ -96,7 +97,7 @@ class NBPotential(plmrf.PotentialFunction):
         self.bandwidth = 5 
     
     def variables(self):
-        return [self.response_var] + self.predictors
+        return [self.response_var]
 
     def __call__(self, dmap):
         features = np.column_stack([dmap[p] for p in predictors])
