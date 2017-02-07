@@ -15,6 +15,8 @@ import os
 import cPickle as pickle
 import argparse
 from scipy.special import gammaln
+import scipy as sp
+from sklearn import preprocessing as skpreprocessing
 
 def safe_mkdir(dir_to_create):
     try:
@@ -64,12 +66,13 @@ def main():
     transform = get_feature_preprocessor(train_features, predictors, should_write=args.job_id == 0)
 
     sample_features = train_features.sample(n=min(train_features.shape[0], 20000))
+    #sample_features = train_features
     global_models = dict()
     for outcome_var in OUTCOME_VARS:
         print("Fitting global model of {0}".format(outcome_var))
         model = statsmodels.discrete.discrete_model.NegativeBinomial(
             sample_features[outcome_var], transform(sample_features[predictors]))
-        global_models[outcome_var] = model.fit(maxiter=1000, disp=0)
+        global_models[outcome_var] = model.fit(maxiter=1000, disp=0, skip_hessian=True)
 
     for i, group in enumerate(param_groups):
         target_file = "../../models/mrf/nb-groups/{0}.p".format(i)
@@ -122,22 +125,26 @@ def get_feature_preprocessor(features, predictors, should_write=False):
         Creates and returns a function which transforms features from their original 
         space to projected space in which the finite-dimensional dot product approximates RBF.
 
-        Features are first 'decorrelated' using PCA, then projected by 
+        Features are first scaled, then 'decorrelated' using PCA, then projected by 
         sampling from the fourier transform of the RBF kernel.
     """
     fourier_sampler = RBFSampler(random_state=10, n_components=100)
+    scaler = skpreprocessing.StandardScaler().fit(features[predictors])
     pca_transformer = PCA(n_components=0.99)
-    pca_transformer.fit(features[predictors])
 
-    pca_output = pca_transformer.transform(features[predictors])
+    scaled_data = scaler.transform(features[predictors])
+    pca_transformer.fit(scaled_data)
+
+    pca_output = pca_transformer.transform(scaled_data)
+    print("Selected {0} principal components".format(pca_output.shape[1]))
     fourier_sampler.fit(pca_output)
 
     if should_write:
         with open("../../models/mrf/transformer.p", "wb+") as handle:
-            pickle.dump({"pca" : pca_transformer, "rbf-sampler" : fourier_sampler}, handle)
+            pickle.dump({"pca" : pca_transformer, "rbf-sampler" : fourier_sampler, "scaler" : scaler}, handle)
 
     def transform(dat):
-        return pca_rbf_transform(pca_transformer, fourier_sampler, dat)
+        return pca_rbf_transform(scaler, pca_transformer, fourier_sampler, dat)
 
     return transform
 
@@ -162,8 +169,9 @@ def nb_map(features, domain, params):
         maps.append(domain[np.argmax(mass)])
     return maps
 
-def pca_rbf_transform(pca_transformer, fourier_sampler, dat):
-    pca_data = pca_transformer.transform(dat)
+def pca_rbf_transform(scaler, pca_transformer, fourier_sampler, dat):
+    scaled_data = scaler.transform(dat)
+    pca_data = pca_transformer.transform(scaled_data)
     fourier_features = fourier_sampler.transform(pca_data)
     features_with_constant = statsmodels.tools.add_constant(fourier_features)
     return features_with_constant
@@ -173,9 +181,10 @@ def load_feature_preprocessor():
         transformers = pickle.load(handle)
         pca_transformer = transformers["pca"]
         fourier_sampler = transformers["rbf-sampler"]
+        scaler = transformers["scaler"]
 
     def transform(dat):
-        return pca_rbf_transform(pca_transformer, fourier_sampler, dat)
+        return pca_rbf_transform(scaler, pca_transformer, fourier_sampler, dat)
 
     return transform
 
@@ -235,8 +244,9 @@ def fit_count_models(features, cell_ids, transform, predictors, global_models):
 
     for outcome_var in OUTCOME_VARS:
         cur_responses = cell_data[outcome_var]
+        domain = [np.min(cur_responses), np.max(cur_responses)]
         if cur_responses.sum() < 10:
-            outcome_params[outcome_var] = {"model_type" : "median", "median_value" : np.median(cur_responses)}
+            outcome_params[outcome_var] = {"model_type" : "median", "median_value" : np.median(cur_responses), "domain" : domain}
         else:
             print("\trunning {0}, {1}, response sum is {2}".format(cell_ids, outcome_var, cur_responses.sum()))
             with warnings.catch_warnings():
@@ -244,23 +254,21 @@ def fit_count_models(features, cell_ids, transform, predictors, global_models):
                 try:
                     pmodel = statsmodels.discrete.discrete_model.NegativeBinomial(cur_responses, transformed_predictors) 
                     start_params = global_models[outcome_var].params
-                    print(start_params)
                     results = pmodel.fit_regularized(method="l1", 
                             #start_params=np.append(poisson_fit.params, 0.1), 
                             start_params = start_params,
-                            maxiter=300, disp=0, acc=1e-4)
+                            maxiter=300, disp=0, acc=1e-4, skip_hessian=True)
 
-                    #print(results.mle_retvals)
                     assert not np.isnan(results.params.max())
 
                     outcome_params[outcome_var] = {"model_type" : "negative-binomial", 
                         "parameters" : results.params, 
-                        "mle_result" : results.mle_retvals}
+                        "mle_result" : results.mle_retvals, "domain" : domain}
                 except (ConvergenceWarning, np.linalg.linalg.LinAlgError, AssertionError) as e:
                     if cur_responses.sum() >= 100:
                         sys.stderr.write("convergence problem with lots of non-zero cases (cells: {0})!\n".format(cell_ids))
                     outcome_params[outcome_var] = {"model_type" : "median", 
-                        "median_value" : np.median(cur_responses)}
+                        "median_value" : np.median(cur_responses), "domain" : domain}
 
     return outcome_params
 

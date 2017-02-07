@@ -1,6 +1,6 @@
 Count features: 95% NRMSE
-Count features with month:
-Count features with month,weather:
-Count features with month,weather,events:
+Count features with month: 78% NRMSE
+Count features with month, weather: 67.5% NRMSE
+Count features with month, weather, labor stats, scaling fix: 62.8%
 
 
