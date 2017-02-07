@@ -5,4 +5,6 @@ target
 *.swp
 .RData
 .ipynb_checkpoints
+*.pyc
+*.sqlite
 
