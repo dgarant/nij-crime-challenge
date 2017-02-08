@@ -7,4 +7,5 @@ target
 .ipynb_checkpoints
 *.pyc
 *.sqlite
+features/count-features-*.csv.gz
 
