@@ -301,9 +301,9 @@ def load_parameter_groups(path):
 
 def build_parameter_groups(meta, total_crimes_by_cell):
 
-    # non-inclusive limits on the number of crimes occuring 
+    # inclusive limits on the number of crimes occuring 
     # within a cell to participate in parameter tying
-    group_crime_bounds = [9, 500] 
+    group_crime_bounds = [0, 500] 
 
     target_file = "../../models/mrf/param_groups.csv"
     if os.path.exists(target_file):
@@ -316,22 +316,22 @@ def build_parameter_groups(meta, total_crimes_by_cell):
         def can_group(cell_id):
             info = meta.loc[cell_id]
             return (not cell_id in param_group_map and 
-                info["num.crimes"] > group_crime_bounds[0] and 
-                info["num.crimes"] < group_crime_bounds[1])
+                info["num.crimes"] >= group_crime_bounds[0] and 
+                info["num.crimes"] <= group_crime_bounds[1])
 
         for i, row in meta.iterrows():
             successors[i] = [int(row[key]) for key in ["idnorth", "ideast", "idsouth", "idwest", 
                                          "idnortheast", "idnorthwest", 
                                          "idsoutheast", "idsouthwest"] if not pd.isnull(row[key])]
 
-        def bfs(root, succfun, node_limit=30):
+        def bfs(root, succfun, node_limit=20):
             visited = set()
             visited.add(root)
             queue = [root]
             while queue:
                 current = queue.pop(0)
                 yield current
-                for n in succfun(root):
+                for n in succfun(current):
                     if not n in visited and can_group(n):
                         if len(visited) == node_limit:
                             return

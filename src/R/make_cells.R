@@ -180,5 +180,8 @@ for(cur.id in id.sample) {
 groups <- read.csv("../../models/mrf/param_groups.csv")
 c2 <- merge(area.cells, groups, by.x="id", by.y="cellid", suffixes=c("", ".g"), all.x=TRUE)
 c2 <- c2[order(c2$group, c2$order), ]
-ggplot(c2, aes(x=long, y=lat, group=group, fill=factor(group.g))) + geom_polygon() + guides(fill="none")
+library(digest)
+# using a diverse set of colors for adjaceny groups
+group.hash <- factor(floor((tan(c2$group.g) * 100000)) %% 20)
+ggplot(c2, aes(x=long, y=lat, group=group, fill=group.hash)) + geom_polygon() + guides(fill="none") + theme_empty
 
