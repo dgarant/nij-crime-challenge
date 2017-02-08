@@ -24,26 +24,27 @@ def main():
     print("Loading cell potentials")
     #cell_models = load_potentials(meta, param_groups, param_group_map)
     cell_models = None
-    print("Loading training data")
-    features = pd.read_csv(gzip.open("../../features/count-features-{0}.csv.gz".format(cell_dim), "rb"), index_col="cell_id")
-    train_data, test_data = get_train_test_split(features)
-    predictor_names = get_predictor_names(train_data)
+    #print("Loading training data")
+    #features = pd.read_csv(gzip.open("../../features/count-features-{0}.csv.gz".format(cell_dim), "rb"), index_col="cell_id", nrows=10)
+    #train_data, test_data = get_train_test_split(features)
+    transformed_predictor_names = feature_transformer(features[predictor_names]).columns.values
 
     outcome_networks = dict()
     for outcome in OUTCOME_VARS:
         print("Working on {0}".format(outcome))
-        outcome_networks[outcome] = build_network(meta, train_data, outcome, predictor_names, cell_models, param_groups, param_group_map)
+        outcome_networks[outcome] = build_network(meta, outcome, transformed_predictor_names, cell_models, param_groups, param_group_map)
 
     with open("../../models/mrf/mrf-structure.p", "w+") as handle:
         pickle.dump(outcome_networks, handle)
 
-def build_network(meta, train_data, outcome_var, predictor_names, cell_models, param_groups, param_group_map):
+def build_network(meta, outcome_var, predictor_names, cell_models, param_groups, param_group_map):
 
     feature_transformer = load_feature_preprocessor()
 
     potential_funs = []
     variable_spec = []
     tied_weights = [[]] * len(param_groups)
+    conditioned = dict()
     for cell_id, cell_meta in meta.iterrows():
         #model = cell_models[cell_id][outcome_var]
         model = load_cell_potentials(cell_id, param_groups, param_group_map)[outcome_var]
@@ -53,13 +54,10 @@ def build_network(meta, train_data, outcome_var, predictor_names, cell_models, p
 
         cell_outcome_name = "{0}_{1}".format(cell_id, outcome_var)
 
-        cell_data = train_data.loc[cell_id]
-        cell_responses = cell_data[outcome_var]
-        domain = [np.min(cell_responses), np.max(cell_responses)]
-
+        domain = np.arange(model["domain"][0], model["domain"][1]+1)
         variable_spec.append(plmrf.VariableDef(cell_outcome_name, ddomain=domain))
 
-        cell_predictor_names = ["{0}_{1}".format(cell_id, p) for p in transformed_predictor_names]
+        cell_predictor_names = ["{0}_{1}".format(cell_id, p) for p in predictor_names]
         
         # form connections to all cells with greater ids, 
         # to ensure they are created only once
@@ -74,8 +72,10 @@ def build_network(meta, train_data, outcome_var, predictor_names, cell_models, p
 
         if model["model_type"] == "negative-binomial":
             new_potential = NBPotential(cell_outcome_name, cell_predictor_names, model["parameters"], feature_transformer)
+            conditioned[cell_outcome_name] = cell_predictor_names
         elif model["model_type"] == "median":
             new_potential = plmrf.GaussianPotential([cell_outcome_name], location=model["median_value"], bandwidth=20)
+            conditioned[cell_outcome_name] = []
         else:
             raise ValueError("Unknown model_type: {0}".format(model["model_type"]))
 
@@ -83,18 +83,16 @@ def build_network(meta, train_data, outcome_var, predictor_names, cell_models, p
         if cell_id in param_group_map:
             tied_weights[param_group_map[cell_id]].append(len(potential_funs) - 1)
 
-    network = plmrf.LogLinearMarkovNetwork(potential_funs, variable_spec, tied_weights)
+    network = plmrf.LogLinearMarkovNetwork(potential_funs, variable_spec, tied_weights=tied_weights, conditioned=conditioned)
     
 class NBPotential(plmrf.PotentialFunction):
 
-    def __init__(self, response_var, predictors, model_params, feature_transformer):
+    def __init__(self, response_var, predictors, model_params, feature_transformer, bandwidth):
         self.response_var = response_var
         self.predictors = predictors
         self.model_params = model_params
         self.feature_transformer = feature_transformer
-
-        # seems reasonable, maybe should tune this
-        self.bandwidth = 5 
+        self.bandwidth = bandwidth
     
     def variables(self):
         return [self.response_var]
@@ -106,8 +104,7 @@ class NBPotential(plmrf.PotentialFunction):
 
         response = dmap[self.response_var]
 
-        # laplace kernel
-        return np.exp(-np.abs(expected_val - response) / self.bandwidth)
+        return np.exp(-np.power(expected_val - response, 2.0) / self.bandwidth)
 
     def __str__(self):
         return "NBPotential(" + self.response_var + ")"
