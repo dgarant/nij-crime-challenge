@@ -164,6 +164,10 @@ def get_feature_preprocessor(features, predictors, should_write=False):
 
     return feature_transformer
 
+def load_feature_preprocessor():
+    with open("../../models/mrf/transformer.p", "r") as handle:
+        return pickle.load(handle)
+
 def nb_mass(response, features, params):
     """ Probability mass of response observations under negative binomial model """
     pred_resp = np.exp(np.dot(features, params[:-1]))
@@ -184,10 +188,6 @@ def nb_map(features, domain, params):
         mass = np.exp(gammaln(size+domain) - gammaln(domain+1) + size*np.log(prob) + domain*np.log(1-prob))
         maps.append(domain[np.argmax(mass)])
     return maps
-
-def load_feature_preprocessor():
-    with open("../../models/mrf/transformer.p", "r") as handle:
-        return pickle.load(handle)
 
 def load_cell_potentials(cell_id, param_groups, param_group_map, cache=None):
     if cell_id in param_group_map:
