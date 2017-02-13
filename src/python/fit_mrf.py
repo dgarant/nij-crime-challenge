@@ -16,6 +16,10 @@ from scipy.special import gammaln
 cell_dim = 550
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--no-cache")
+    args = parser.parse_args()
+
     print("Loading parameter tying groups")
     param_group_file = "../../models/mrf/param_groups.csv"
     param_groups, param_group_map = load_parameter_groups(param_group_file)
@@ -23,20 +27,55 @@ def main():
     meta = pd.read_csv("../../models/cells/cells-dim-{0}-meta.csv".format(cell_dim), index_col="id")
     print("Loading cell potentials")
     cell_models = load_potentials(meta, param_groups, param_group_map)
-    #print("Loading training data")
-    #features = pd.read_csv(gzip.open("../../features/count-features-{0}.csv.gz".format(cell_dim), "rb"), index_col="cell_id", nrows=10)
-    #train_data, test_data = get_train_test_split(features)
-    feature_transformer = load_feature_preprocessor()
-    transformed_predictor_names = feature_transformer.final_feature_names
 
-    outcome_networks = dict()
+    print("Loading training data")
+    features = pd.read_csv(gzip.open("../../features/count-features-{0}.csv.gz".format(cell_dim), "rb"), index_col="cell_id")
+    train_features, teset_features = get_train_test_split(features)
+
     for outcome in OUTCOME_VARS:
         print("Working on {0}".format(outcome))
-        outcome_networks[outcome] = build_network(meta, outcome, transformed_predictor_names, cell_models, param_groups, param_group_map)
-        with open("../../models/mrf/mrf-structure_{0}.p".format(outcome), "w+") as handle:
-            pickle.dump(outcome_networks[outcome], handle)
+        structure_file = "../../models/mrf/mrf-structure_{0}.p".format(outcome)
+        if os.path.exists(structure_file) and not args.no_cache:
+            print("Loading network ...")
+            with open(structure_file, "rb") as handle:
+                network = pickle.load(handle)
+        else:
+            print("Building network ...")
+            network = build_network(meta, outcome, cell_models, param_groups, param_group_map)
+            with open(structure_file, "wb+") as handle:
+                pickle.dump(network, handle, pickle.HIGHEST_PROTOCOL)
 
-def build_network(meta, outcome_var, predictor_names, cell_models, param_groups, param_group_map):
+        print("Building training data map ...")
+        train_map = build_training_data(train_features, outcome, cell_models)
+        print("Fitting network ...")
+        fit_result = network.fit(train_map, log=True, maxiter=100)
+        print(fit_result)
+        with open(structure_file, "wb+") as handle:
+            pickle.dump(network, handle, pickle.HIGHEST_PROTOCOL)
+
+def build_training_data(train_features, outcome_var, cell_models):
+    feature_transformer = load_feature_preprocessor()
+
+    predictors = get_predictor_names(train_features)
+    train_data_map = dict()
+
+    grouped_cells = train_features.groupby(level=0)
+
+    for cell, cell_features in grouped_cells:
+        cell_features = cell_features.sort_values(by="forecast_start")
+        outcome_name = "{0}_{1}".format(cell, outcome_var)
+        train_data_map[outcome_name] = np.array(cell_features[outcome_var])
+
+        model = cell_models[cell][outcome_var]
+        if model["model_type"] == "negative-binomial":
+            transformed_preds = feature_transformer(cell_features[predictors])
+            pred_name = "{0}_{1}_nbexp".format(cell, outcome_var)
+            params = model["parameters"][:-1]
+            train_data_map[pred_name] = np.exp(np.dot(transformed_preds, params))
+
+    return train_data_map
+
+def build_network(meta, outcome_var, cell_models, param_groups, param_group_map):
 
     feature_transformer = load_feature_preprocessor()
 
@@ -53,66 +92,42 @@ def build_network(meta, outcome_var, predictor_names, cell_models, param_groups,
         cell_outcome_name = "{0}_{1}".format(cell_id, outcome_var)
 
         domain = np.arange(model["domain"][0], model["domain"][1]+1)
-        variable_spec.append(plmrf.VariableDef(cell_outcome_name, ddomain=domain))
+        if model["model_type"] == "negative-binomial":
 
-        cell_predictor_names = ["{0}_{1}".format(cell_id, p) for p in predictor_names]
-        
-        # form connections to all cells with greater ids, 
-        # to ensure they are created only once
-        adj_cell_ids = [int(cell_meta[k]) for k in ["idnorth", "idsouth", "ideast", "idwest", 
-                    "idnortheast", "idsoutheast", "idnorthwest", "idsouthwest"] 
-                    if not cell_meta[k] is None and cell_id < cell_meta[k]]
+            variable_spec.append(plmrf.VariableDef(cell_outcome_name, ddomain=domain))
 
-        for adj_cell_id in adj_cell_ids:
-            adj_potential = plmrf.GaussianPotential([cell_outcome_name, "{0}_{1}".format(adj_cell_id, outcome_var)], bandwidth=5)
-            potential_funs.append(adj_potential)
+            # form connections to all cells with greater ids, 
+            # to ensure they are created only once
+            adj_cell_ids = [int(cell_meta[k]) for k in ["idnorth", "idsouth", "ideast", "idwest", 
+                        "idnortheast", "idsoutheast", "idnorthwest", "idsouthwest"] 
+                        if not cell_meta[k] is None and cell_id < cell_meta[k]]
+
+            for adj_cell_id in adj_cell_ids:
+                adj_potential = plmrf.GaussianPotential([cell_outcome_name, "{0}_{1}".format(adj_cell_id, outcome_var)], bandwidth=5)
+                potential_funs.append(adj_potential)
+
+                if cell_id in param_group_map:
+                    tied_weights[param_group_map[cell_id]].append(len(potential_funs) - 1)
+            adj_median_cell_outcomes = ["{0}_{1}".format(i, outcome_var) for i in adj_cell_ids 
+                if cell_models[i][outcome_var]["model_type"] == "median"]
+
+            predictor_name = cell_outcome_name + "_nbexp"
+            new_potential = plmrf.GaussianPotential(
+                [cell_outcome_name, predictor_name], bandwidth=max(model["bw"][0.5], 1.0))
+            conditioned[cell_outcome_name] = [predictor_name] + adj_median_cell_outcomes
+            potential_funs.append(new_potential)
 
             if cell_id in param_group_map:
                 tied_weights[param_group_map[cell_id]].append(len(potential_funs) - 1)
 
-        if model["model_type"] == "negative-binomial":
-            new_potential = NBPotential(cell_outcome_name, cell_predictor_names, 
-                model["parameters"], feature_transformer, bandwidth=model["bw"][0.5])
-            conditioned[cell_outcome_name] = cell_predictor_names
         elif model["model_type"] == "median":
-            new_potential = plmrf.GaussianPotential([cell_outcome_name], 
-                location=model["median_value"], bandwidth=model["bw"][0.5])
-            conditioned[cell_outcome_name] = []
+            pass
         else:
             raise ValueError("Unknown model_type: {0}".format(model["model_type"]))
-
-        potential_funs.append(new_potential)
-        if cell_id in param_group_map:
-            tied_weights[param_group_map[cell_id]].append(len(potential_funs) - 1)
 
     network = plmrf.LogLinearMarkovNetwork(potential_funs, variable_spec, tied_weights=tied_weights, conditioned=conditioned)
     
     return network
-
-class NBPotential(plmrf.PotentialFunction):
-
-    def __init__(self, response_var, predictors, model_params, feature_transformer, bandwidth):
-        self.response_var = response_var
-        self.predictors = predictors
-        self.model_params = model_params
-        self.feature_transformer = feature_transformer
-        self.bandwidth = bandwidth
-    
-    def variables(self):
-        return [self.response_var]
-
-    def __call__(self, dmap):
-        features = np.column_stack([dmap[p] for p in predictors])
-        transformed_features = self.feature_transformer(features)
-        expected_val = np.exp(transformed_features, np.dot(self.model_params[:-1]))
-
-        response = dmap[self.response_var]
-
-        return np.exp(-np.power(expected_val - response, 2.0) / self.bandwidth)
-
-    def __str__(self):
-        return "NBPotential(" + self.response_var + ")"
-
 
 if __name__ == "__main__":
     main()

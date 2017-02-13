@@ -1,6 +1,11 @@
-Count features: 95% NRMSE
-Count features with month: 78% NRMSE
-Count features with month, weather: 67.5% NRMSE
-Count features with month, weather, labor stats, scaling fix: 62.8%
+100 dim:
+    Count features: 95% NRMSE
+    Count features with month: 78% NRMSE
+    Count features with month, weather: 67.5% NRMSE
+    Count features with month, weather, labor stats, scaling fix: 62.8%
+
+200 dim, all features: 203%
+
+No RBF projection: 292%
 
 

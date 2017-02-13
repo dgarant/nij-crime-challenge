@@ -55,8 +55,8 @@ class FeaturePreprocessor(object):
         scaled = self.scaler.transform(features)
         othog = self.pca_transformer.transform(scaled)
         rbf_sampled = self.fourier_sampler.transform(othog)
-        final_features = statsmodels.tools.add_constant(rbf_sampled)
-        
+        final_features = statsmodels.tools.add_constant(rbf_sampled, prepend=True)
+         
         return final_features
 
 def main():
@@ -99,7 +99,7 @@ def main():
         print("Fitting global model of {0}".format(outcome_var))
         model = statsmodels.discrete.discrete_model.NegativeBinomial(
             sample_features[outcome_var], transform(sample_features[predictors]))
-        global_models[outcome_var] = model.fit(maxiter=1000, disp=0, skip_hessian=True)
+        global_models[outcome_var] = model.fit(maxiter=200, disp=0, skip_hessian=True)
 
     for i, group in enumerate(param_groups):
         target_file = "../../models/mrf/nb-groups/{0}.p".format(i)
@@ -142,7 +142,7 @@ def get_train_test_split(features):
     """
     features = features.dropna()
     # deterministic train/test sampling 
-    row_hash = features.apply(lambda x: hash(tuple(x)) % 10, axis=1)
+    row_hash = features.apply(lambda x: hash(x["forecast_start"]) % 10, axis=1)
     train_features = features[row_hash < 7]
     test_features = features[row_hash >= 7]
     return (train_features, test_features)
