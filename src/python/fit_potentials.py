@@ -17,47 +17,15 @@ import argparse
 from scipy.special import gammaln
 import scipy as sp
 from sklearn import preprocessing as skpreprocessing
+import sklearn
+warnings.filterwarnings(action="ignore", module="scipy", message="^internal gelsd")
+from process_features import *
 
 def safe_mkdir(dir_to_create):
     try:
         os.makedirs(dir_to_create)
     except OSError:
         pass
-
-DAY_WINDOWS = [7, 14, 30, 61, 91]
-OUTCOME_CATEGORIES = ["BURGLARY", "MOTOR VEHICLE THEFT", "STREET CRIMES", "ALL"]
-
-OUTCOME_VARS = []
-for forecast_window_days in DAY_WINDOWS:
-    for category in OUTCOME_CATEGORIES:
-        OUTCOME_VARS.append("outcome_num_crimes_{0}days_{1}".format(forecast_window_days, category))
-
-class FeaturePreprocessor(object):
-    def __init__(self):
-        self.fourier_sampler = RBFSampler(random_state=10, n_components=100)
-        self.scaler = skpreprocessing.StandardScaler()
-        self.pca_transformer = PCA(n_components=0.99)
-
-    def fit(self, features):
-        self.original_feature_names = features.columns.values
-        self.scaler.fit(features)
-        scaled_data = self.scaler.transform(features)
-        self.pca_transformer.fit(scaled_data)
-
-        pca_output = self.pca_transformer.transform(scaled_data)
-        print("Selected {0} principal components".format(pca_output.shape[1]))
-        self.fourier_sampler.fit(pca_output)
-        rbf_sampled = self.fourier_sampler.transform(pca_output)
-        final_features = statsmodels.tools.add_constant(rbf_sampled, prepend=True)
-        self.final_feature_names = ["const"] + ["p{0}".format(i) for i in range(rbf_sampled.shape[1])]
-    
-    def __call__(self, features):
-        scaled = self.scaler.transform(features)
-        othog = self.pca_transformer.transform(scaled)
-        rbf_sampled = self.fourier_sampler.transform(othog)
-        final_features = statsmodels.tools.add_constant(rbf_sampled, prepend=True)
-         
-        return final_features
 
 def main():
     parser = argparse.ArgumentParser()
@@ -80,27 +48,38 @@ def main():
     param_groups, param_group_map = build_parameter_groups(meta, total_crimes_by_cell)
 
     if not args.nrows is None:
-        features = pd.read_csv(gzip.open("../../features/count-features-{0}.csv.gz".format(cell_dim), "rb"), 
+        features = pd.read_csv(gzip.open("../../features/processed-features-{0}.csv.gz".format(cell_dim), "rb"), 
             index_col="cell_id", nrows=args.nrows)
     else:
-        features = pd.read_csv(gzip.open("../../features/count-features-{0}.csv.gz".format(cell_dim), "rb"), 
+        features = pd.read_csv(gzip.open("../../features/processed-features-{0}.csv.gz".format(cell_dim), "rb"), 
             index_col="cell_id")
+    features = features.dropna()
     predictors = get_predictor_names(features)
 
-    train_features, test_features = get_train_test_split(features)
-    print("Training set size: {0}".format(train_features.shape))
-    print("Testing set size: {0}".format(test_features.shape))
-    transform = get_feature_preprocessor(train_features, predictors, should_write=args.job_id == 0)
+    train_features = features[features.istrain == 1]
+    test_features = features[features.istrain == 0]
 
-    sample_features = train_features.sample(n=min(train_features.shape[0], 20000))
-    #sample_features = train_features
+    del features
+
+    # cells without any crime aren't considered later in the process
+    sample_features = train_features
     global_models = dict()
+    global_train_preds = np.asarray(sample_features[predictors])
+    print(global_train_preds)
     for outcome_var in OUTCOME_VARS:
-        print("Fitting global model of {0}".format(outcome_var))
-        model = statsmodels.discrete.discrete_model.NegativeBinomial(
-            sample_features[outcome_var], transform(sample_features[predictors]))
-        global_models[outcome_var] = model.fit(maxiter=200, disp=0, skip_hessian=True)
+        outcome_dev = np.std(sample_features[outcome_var])
+        print("Fitting global model of {0} response std dev {1}".format(outcome_var, np.round(outcome_dev, 2)))
+        if outcome_dev < 1:
+            cur_train_preds = global_train_preds[:, 0:8]
+        else:
+            cur_train_preds = global_train_preds
 
+        print("Using {0} predictors".format(cur_train_preds.shape[1]))
+        model = statsmodels.discrete.discrete_model.Poisson(
+            sample_features[outcome_var], global_train_preds)
+        global_models[outcome_var] = model.fit(maxiter=1000, disp=1)
+
+    all_errors = []
     for i, group in enumerate(param_groups):
         target_file = "../../models/mrf/nb-groups/{0}.p".format(i)
         if not os.path.exists(target_file) or args.no_cache:
@@ -108,12 +87,14 @@ def main():
                 #print("Skipping group {0}, another job is doing this".format(i))
                 continue
 
-            print("J{0}: Fitting model for group {1}, with members {2}".format(args.job_id, i, group))
-            models = fit_count_models(train_features, group, transform, predictors, global_models)
+            print("J{0}: Fitting model for group {1}, with members {2}{3}".format(args.job_id, i, group, 
+                ", NRMSE: {0}".format(np.mean(all_errors)) if len(all_errors) > 0 else "" ))
+            errors, models = fit_count_models(train_features, test_features, group, global_models)
             with open(target_file, "wb+") as handle:
                 pickle.dump(models, handle)
+            all_errors.extend(errors)
 
-    for i, cell_id in enumerate(set(features.index.values)):
+    for i, cell_id in enumerate(set(meta.index.values)):
         if cell_id in param_group_map:
             continue
 
@@ -122,51 +103,19 @@ def main():
             if  i % args.num_jobs != args.job_id:
                 #print("Skipping cell {0}, another job is doing this".format(cell_id))
                 continue
-            print("J{0}: Fitting model for {1}, with {2} total crimes".format(args.job_id, cell_id, total_crimes_by_cell[cell_id]))
-            models = fit_count_models(train_features, cell_id, transform, predictors, global_models)
+            print("J{0}: Fitting model for {1}, with {2} total crimes{3}".format(args.job_id, cell_id, total_crimes_by_cell[cell_id],
+                ", NRMSE: {0}".format(np.mean(all_errors)) if len(all_errors) > 0 else "" ))
+            errors, models = fit_count_models(train_features, test_features, cell_id, global_models)
             with open(target_file, "wb+") as handle:
                 pickle.dump(models, handle)
 
-def get_predictor_names(features):
-    lagged_predictors = [p for p in features.columns.values if p.startswith("p_")]
-    future_predictors = [p for p in features.columns.values if not p.startswith("outcome_") and 
-                                                         not p.startswith("p_") and 
-                                                         not p == "cell_id" and 
-                                                         not p == "forecast_start"]
-    predictors = lagged_predictors + future_predictors
-    return predictors
+            all_errors.extend(errors)
+            if len(all_errors) > 0 and i % 1000 == 0:
+                print("-------------------------------------")
+                print("Mean NRMSE: {0}".format(np.mean(all_errors)))
+                print("-------------------------------------")
 
-def get_train_test_split(features):
-    """
-        Creates a deterministic 70/30 train/test split from the supplied features.
-    """
-    features = features.dropna()
-    # deterministic train/test sampling 
-    row_hash = features.apply(lambda x: hash(x["forecast_start"]) % 10, axis=1)
-    train_features = features[row_hash < 7]
-    test_features = features[row_hash >= 7]
-    return (train_features, test_features)
-
-def get_feature_preprocessor(features, predictors, should_write=False):
-    """ 
-        Creates and returns a function which transforms features from their original 
-        space to projected space in which the finite-dimensional dot product approximates RBF.
-
-        Features are first scaled, then 'decorrelated' using PCA, then projected by 
-        sampling from the fourier transform of the RBF kernel.
-    """
-    feature_transformer = FeaturePreprocessor()
-    feature_transformer.fit(features[predictors])
-
-    if should_write:
-        with open("../../models/mrf/transformer.p", "wb+") as handle:
-            pickle.dump(feature_transformer, handle)
-
-    return feature_transformer
-
-def load_feature_preprocessor():
-    with open("../../models/mrf/transformer.p", "r") as handle:
-        return pickle.load(handle)
+    print("Mean NRMSE: {0}".format(np.mean(all_errors)))
 
 def nb_mass(response, features, params):
     """ Probability mass of response observations under negative binomial model """
@@ -201,50 +150,23 @@ def load_cell_potentials(cell_id, param_groups, param_group_map, cache=None):
     with open(model_file, "r") as handle:
         return pickle.load(handle)
 
-def load_potentials(meta, param_groups, param_group_map):
-    group_cache = dict()
-    for i, group in enumerate(param_groups):
-        model_file = "../../models/mrf/nb-groups/{0}.p".format(i)
-        with open(model_file, "r") as handle:
-            group_cache[model_file] = pickle.load(handle)
-
-    cell_models = dict()
-    for cell_id in meta.index.values:
-        cell_models[cell_id] = load_cell_potentials(cell_id, param_groups, param_group_map, group_cache)
-
-    return cell_models
-
-def generate_cell_features(path):
-    """ 
-        Assuming the file at `path` is ordered by cell_id, 
-        iteratively produces dataframes representing each cell.
-    """
-    from io import StringIO
-
-    with gzip.open(path, "rb") as handle:
-        header = next(handle)
-        prev_cell_id = None
-        line_buffer = [header]
-        for line in handle:
-            components = line.split(",")
-            cell_id = components[0]
-            if cell_id != prev_cell_id and not prev_cell_id is None:
-                str_f = StringIO(u"".join(line_buffer))
-                yield pd.read_csv(str_f, index_col="cell_id")
-                line_buffer = [header, line]
-            line_buffer.append(line)
-            prev_cell_id = cell_id
-
-def fit_count_models(features, cell_ids, transform, predictors, global_models):
+def fit_count_models(train_features, test_features, cell_ids, global_models):
     """ Fits regression models to the crime counting process """
 
     outcome_params = dict()
-    cell_data = features.loc[cell_ids]
-    cur_predictors = cell_data[predictors]
-    transformed_predictors = transform(cur_predictors)
+    cell_data = train_features.loc[cell_ids]
+    n_comps = 70 if cell_data.shape[0] > 100 else 25
 
+    predictors = get_pca_preds(n_comps)
+    cur_predictors = np.asarray(cell_data[predictors])
+
+    cell_test_data = test_features.loc[cell_ids]
+    cell_test_preds = np.asarray(cell_test_data[predictors])
+
+    errors = []
     for outcome_var in OUTCOME_VARS:
         cur_responses = cell_data[outcome_var]
+        test_responses = cell_test_data[outcome_var]
         domain = [np.min(cur_responses), np.max(cur_responses)]
         bw_estimates = calc_bandwidth_estimates(cur_responses)
 
@@ -252,29 +174,41 @@ def fit_count_models(features, cell_ids, transform, predictors, global_models):
             outcome_params[outcome_var] = {"model_type" : "median", 
                     "median_value" : np.median(cur_responses), "domain" : domain, "bw" : bw_estimates}
         else:
-            print("\trunning {0}, {1}, response sum is {2}".format(cell_ids, outcome_var, cur_responses.sum()))
-            with warnings.catch_warnings():
-                warnings.filterwarnings("error")
-                try:
-                    pmodel = statsmodels.discrete.discrete_model.NegativeBinomial(cur_responses, transformed_predictors) 
-                    start_params = global_models[outcome_var].params
-                    results = pmodel.fit_regularized(method="l1", 
-                            #start_params=np.append(poisson_fit.params, 0.1), 
-                            start_params = start_params,
-                            maxiter=300, disp=0, acc=1e-4, skip_hessian=True)
+            print("\trunning {0}, {1}, response sum is {2}, training set shape: {3}".format(cell_ids, outcome_var, cur_responses.sum(), cell_test_preds.shape))
+            try:
+                pmodel = statsmodels.discrete.discrete_model.NegativeBinomial(cur_responses, cell_predictors) 
+                start_params = global_models[outcome_var].params
+                results = pmodel.fit_regularized(method="l1", 
+                        #start_params=np.append(poisson_fit.params, 0.1), 
+                        start_params = start_params,
+                        maxiter=300, disp=0, acc=1e-4, skip_hessian=True)
 
-                    assert not np.isnan(results.params.max())
+                pred_resp = pmodel.predict(cell_test_preds)
+                assert not np.isnan(results.params.max())
 
-                    outcome_params[outcome_var] = {"model_type" : "negative-binomial", 
-                        "parameters" : results.params, 
-                        "mle_result" : results.mle_retvals, "domain" : domain, "bw" : bw_estimates}
-                except (ConvergenceWarning, np.linalg.linalg.LinAlgError, AssertionError) as e:
-                    if cur_responses.sum() >= 100:
-                        sys.stderr.write("convergence problem with lots of non-zero cases (cells: {0})!\n".format(cell_ids))
-                    outcome_params[outcome_var] = {"model_type" : "median", 
-                        "median_value" : np.median(cur_responses), "domain" : domain, "bw" : bw_estimates}
+                #lmodel = sklearn.linear_model.LinearRegression(fit_intercept=False)
+                #results = lmodel.fit(transformed_predictors, cur_responses)
+                #pred_resp = lmodel.predict(transformed_test_predictors)
+                #outcome_params[outcome_var] = {"model_type" : "linear-reg", 
+                #    "parameters" : results.coef_, 
+                #    "mle_result" : None, "domain" : domain, "bw" : bw_estimates}
 
-    return outcome_params
+                if np.mean(cur_responses) > 10:
+                    rmse = np.sqrt(np.sum(np.power(test_responses - pred_resp, 2)))
+                    nrmse = rmse / np.mean(cur_responses)
+                    errors.append(nrmse)
+
+                outcome_params[outcome_var] = {"model_type" : "negative-binomial", 
+                    "parameters" : results.params,
+                    "mle_result" : results.mle_retvals, "domain" : domain, 
+                    "bw" : bw_estimates, "n_features" : len(predictors)}
+            except (ConvergenceWarning, np.linalg.linalg.LinAlgError, AssertionError) as e:
+                if cur_responses.sum() >= 100:
+                    sys.stderr.write("convergence problem with lots of non-zero cases (cells: {0})!\n".format(cell_ids))
+                outcome_params[outcome_var] = {"model_type" : "median", 
+                    "median_value" : np.median(cur_responses), "domain" : domain, "bw" : bw_estimates}
+
+    return (errors, outcome_params)
 
 def calc_bandwidth_estimates(vals):
     """ Calculates rule-of-thumb bandwidth for Gaussian kernel based on squared distances """
@@ -283,84 +217,6 @@ def calc_bandwidth_estimates(vals):
     probs = [0.1, 0.25, 0.5, 0.75, 0.9]
     points = sp.stats.mstats.mquantiles(np.power(s1 - s2, 2.0), prob=probs)
     return dict(zip(probs, points))
-
-def load_parameter_groups(path):
-    """ Loads parameter trying groups from a file with columns 'group,cellid' """
-    param_groups = [] # list of sets of parameter groups
-    param_group_map = dict() # maps cell Id to the index of the group it participates in
-    with open(path, "r") as handle:
-        lines = handle.readlines()
-        for line in lines[1:]:
-            group, cellid = [int(a) for a in line.strip().split(",")]
-            param_group_map[cellid] = group
-
-            while len(param_groups) < (group+1):
-                param_groups.append([])
-            param_groups[group].append(cellid)
-    return (param_groups, param_group_map)
-
-def build_parameter_groups(meta, total_crimes_by_cell):
-
-    # inclusive limits on the number of crimes occuring 
-    # within a cell to participate in parameter tying
-    group_crime_bounds = [0, 500] 
-
-    target_file = "../../models/mrf/param_groups.csv"
-    if os.path.exists(target_file):
-        param_groups, param_group_map = load_parameter_groups(target_file)
-    else:
-        param_groups = [] # list of sets of parameter groups
-        param_group_map = dict() # maps cell Id to the index of the group it participates in
-        successors = dict()
-
-        def can_group(cell_id):
-            info = meta.loc[cell_id]
-            return (not cell_id in param_group_map and 
-                info["num.crimes"] >= group_crime_bounds[0] and 
-                info["num.crimes"] <= group_crime_bounds[1])
-
-        for i, row in meta.iterrows():
-            successors[i] = [int(row[key]) for key in ["idnorth", "ideast", "idsouth", "idwest", 
-                                         "idnortheast", "idnorthwest", 
-                                         "idsoutheast", "idsouthwest"] if not pd.isnull(row[key])]
-
-        def bfs(root, succfun, node_limit=20):
-            visited = set()
-            visited.add(root)
-            queue = [root]
-            while queue:
-                current = queue.pop(0)
-                yield current
-                for n in succfun(current):
-                    if not n in visited and can_group(n):
-                        if len(visited) == node_limit:
-                            return
-                        visited.add(n)
-                        queue.append(n)
-
-        for i, row in meta.iterrows():
-            if can_group(i):
-
-                # try to form a new group with BFS
-                nearby_nodes = list(bfs(i, lambda k: successors[k]))
-
-                related_nodes = [n for n in nearby_nodes 
-                    if np.abs(total_crimes_by_cell[n] - total_crimes_by_cell[i] < 10)
-                        and len(successors[n]) == len(nearby_nodes) - 1 and not n in param_group_map]
-                if len(related_nodes) > 1:
-                    for node in related_nodes: # includes i
-                        param_group_map[node] = len(param_groups)
-                    param_groups.append(related_nodes)
-
-        # serialize the parameter typing groups
-
-        with open("../../models/mrf/param_groups.csv", "w+") as handle:
-            handle.write("group,cellid\n")
-            for i,group in enumerate(param_groups):
-                for member in group:
-                    handle.write("{0},{1}\n".format(i, member))
-
-    return (param_groups, param_group_map)
 
 if __name__ == "__main__":
     main()

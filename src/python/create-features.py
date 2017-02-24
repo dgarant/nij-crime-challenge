@@ -126,6 +126,13 @@ def process(feature_file, job_id, njobs):
                 for month_num in range(1, 13):
                     cur_features["p_start_month_{0}".format(month_num)] = int(month_num == forecast_start.month)
                 
+                # St. Patrick's day
+                for day_window in DAY_WINDOWS:
+                    forecast_end_date = forecast_start + datetime.timedelta(days=day_window)
+                    forecast_end_year = forecast_end_date.year
+                    sp_day = datetime.date(forecast_end_year, 3, 17)
+                    cur_features["sp_within_{0}days".format(day_window)] = int(sp_day >= forecast_start and sp_day <= forecast_end_date)
+
                 # daily counts
                 for delta_days in range(3, 8):
                     ddate = forecast_start + datetime.timedelta(days=-delta_days)
@@ -152,7 +159,7 @@ def process(feature_file, job_id, njobs):
                     py_end = py_start_date + datetime.timedelta(days=6)
                     py_outcomes = crimes_in_window(cellid, py_start_date, py_end, cell_count_index)
                     store_count_features(py_outcomes, "py{0}days".format(day_window))
-                
+
                 # day structure
                 for day_window in DAY_WINDOWS:
                     window_end = forecast_start + datetime.timedelta(days=day_window)

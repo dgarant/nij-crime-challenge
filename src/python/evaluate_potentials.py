@@ -1,4 +1,5 @@
 
+from process_features import *
 from fit_potentials import *
 import scipy as sp
 
@@ -31,21 +32,28 @@ def evaluate_models(features, outcome_params, test_cell_ids, transform, predicto
         cur_responses = test_data[outcome_var]
         model_spec = outcome_params[outcome_var]
         domain = np.arange(cur_responses.max())
-        if model_spec["model_type"] == "negative-binomial":
+        pred_responses = None
+        if model_spec["model_type"] == "poisson":
             params = model_spec["parameters"]
 
             if np.mean(cur_responses) > 10:
-                pmodel = statsmodels.discrete.discrete_model.NegativeBinomial(cur_responses, transformed_predictors) 
-                pred_responses = pmodel.predict(params[:-1])
-                diffs = pred_responses - cur_responses
-                rmse = np.sqrt(np.mean(np.power(diffs, 2)))
-                nrmse = rmse / np.mean(cur_responses)
+                pmodel = statsmodels.discrete.discrete_model.Poisson(cur_responses, transformed_predictors) 
+                pred_responses = pmodel.predict(params)
+        elif model_spec["model_type"] == "linear-reg":
+            if np.mean(cur_responses) > 10:
+                params = model_spec["parameters"]
+                pred_responses = np.dot(transformed_predictors, params)
 
-                print("Cell {0}\t\t{1}\t\tNRMSE {2}\tMean Resp: {3}\tEMean: {4}\tBias: {5}".format(
-                    test_cell_ids, outcome_var, np.round(nrmse, 2), np.round(np.mean(cur_responses), 2), 
-                    np.round(np.mean(pred_responses), 2), np.round(np.mean(cur_responses - pred_responses), 2)))
-                
-                yield nrmse
+        if not pred_responses is None:
+            diffs = pred_responses - cur_responses
+            rmse = np.sqrt(np.mean(np.power(diffs, 2)))
+            nrmse = rmse / np.mean(cur_responses)
+
+            print("Cell {0}\t\t{1}\t\tNRMSE {2}\tMean Resp: {3}\tEMean: {4}\tBias: {5}".format(
+                test_cell_ids, outcome_var, np.round(nrmse, 2), np.round(np.mean(cur_responses), 2), 
+                np.round(np.mean(pred_responses), 2), np.round(np.mean(cur_responses - pred_responses), 2)))
+            
+            yield nrmse
 
 if __name__ == "__main__":
     main()

@@ -72,6 +72,11 @@ def build_training_data(train_features, outcome_var, cell_models):
             pred_name = "{0}_{1}_nbexp".format(cell, outcome_var)
             params = model["parameters"][:-1]
             train_data_map[pred_name] = np.exp(np.dot(transformed_preds, params))
+        elif model["model_type"] == "poisson":
+            transformed_preds = feature_transformer(cell_features[predictors])
+            pred_name = "{0}_{1}_nb".format(cell, outcome_var)
+            params = model["parameters"]
+            train_data_map[pred_name] = np.exp(np.dot(transformed_preds, params))
 
     return train_data_map
 
@@ -92,7 +97,7 @@ def build_network(meta, outcome_var, cell_models, param_groups, param_group_map)
         cell_outcome_name = "{0}_{1}".format(cell_id, outcome_var)
 
         domain = np.arange(model["domain"][0], model["domain"][1]+1)
-        if model["model_type"] == "negative-binomial":
+        if model["model_type"] in ["negative-binomial", "poisson"]:
 
             variable_spec.append(plmrf.VariableDef(cell_outcome_name, ddomain=domain))
 
