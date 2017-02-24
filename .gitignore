@@ -7,8 +7,9 @@ target
 .ipynb_checkpoints
 *.pyc
 *.sqlite
-features/count-features-*.csv.gz
+features/*-features-*.csv.gz
 models/mrf/nb-groups/
 models/mrf/nb-individuals/
 models/mrf/mrf-structure*.p
-
+models/mrf/forecasts/*
+models/poisson/forecast.csv

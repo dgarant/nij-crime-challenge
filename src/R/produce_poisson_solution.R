@@ -1,0 +1,5 @@
+options(warn=1)
+library(stringr)
+library(plyr)
+library(data.table)
+pforecast <- fread("~/repos/nij-crime-challenge/models/poisson/forecast.csv", data.table=FALSE)
