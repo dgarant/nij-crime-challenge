@@ -6,6 +6,8 @@ library(ptinpoly)
 library(raster)
 library(plyr)
 library(rgeos)
+library(reshape2)
+library(stringr)
 
 # 550 -> 302500sqft cells, about 14K cells
 cell.dimension.ft <- 550
@@ -111,14 +113,20 @@ for(f in data.files) {
   }
 }
 
+non.cold.crimes <- subset(crimes, !str_detect(CASE_DESC, "- COLD"))
+crimes.by.cell <- over(non.cold.crimes, valid.cells.df)
+crimes.by.cell$category <- non.cold.crimes@data$CATEGORY
 
-crimes.by.cell <- over(crimes, valid.cells.df)
-crimes.by.cell$category <- crimes@data$CATEGORY
-
-raw.crime.cells <- subset(cbind(crimes@data, crimes.by.cell[, "id", drop=FALSE]), !is.na(id))
+raw.crime.cells <- subset(cbind(non.cold.crimes@data, crimes.by.cell[, "id", drop=FALSE]), !is.na(id))
 write.csv(raw.crime.cells, file=gzfile(paste0("../../features/raw_crimes_cells_", cell.dimension.ft, ".csv.gz")))
 
 crime.counts.by.cell <- ddply(crimes.by.cell, .(id), summarize, num.crimes=length(id))
+
+crime.counts.by.cell.and.category <- ddply(crimes.by.cell, .(id, category), summarize, num.crimes=length(id))
+categorized.counts <- reshape(crime.counts.by.cell.and.category, idvar="id", timevar="category", direction="wide")
+colnames(categorized.counts) <- make.names(colnames(categorized.counts))
+
+crime.counts.by.cell <- merge(crime.counts.by.cell, categorized.counts, by=c("id"))
 
 library(GGally) 
 valid.cells.center <- ldply(valid.cells.df@polygons, function(p) {
@@ -127,7 +135,10 @@ valid.cells.center <- ldply(valid.cells.df@polygons, function(p) {
 })
 valid.cells.center <- merge(valid.cells.center, valid.cells.df@data, by="id")
 crime.meta <- merge(valid.cells.center, crime.counts.by.cell, by="id", all.x=TRUE)
-crime.meta[is.na(crime.meta$num.crimes), "num.crimes"] <- 0
+for(type in c("", ".OTHER", ".MOTOR.VEHICLE.THEFT", ".STREET.CRIMES", ".BURGLARY")) {
+  col <- paste0("num.crimes", type)
+  crime.meta[is.na(crime.meta[, col]), col] <- 0
+}
 
 
 theme_empty <- theme_bw()

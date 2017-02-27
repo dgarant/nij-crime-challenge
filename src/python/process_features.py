@@ -41,8 +41,8 @@ def main():
     param_groups, param_group_map = build_parameter_groups(meta, total_crimes_by_cell)
 
     features = pd.read_csv(gzip.open("../../features/count-features-{0}.csv.gz".format(cell_dim)))
-    features = features.dropna()
     predictors = get_predictor_names(features)
+    features = features.dropna(subset=predictors)
     features["istrain"] = get_train_test_indicator(features)
 
     print("Training set size: {0}".format(features.istrain.sum()))
@@ -143,7 +143,8 @@ def get_predictor_names(features):
     return predictors
 
 def get_train_test_indicator(features):
-    return features.apply(lambda x: int(hash(x["forecast_start"]) % 10 < 7), axis=1)
+    return features.apply(lambda x: int(hash(x["forecast_start"]) % 10 < 8 
+        and not pd.isnull(x["outcome_num_crimes_91days_ALL"])), axis=1)
 
 def get_train_test_split(features):
     """

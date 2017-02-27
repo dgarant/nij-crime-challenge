@@ -49,3 +49,15 @@ for(groupid in names(split.test)) {
             col.names=write.header, append=!write.header, row.names=FALSE, quote=FALSE, sep=",")
   write.header <- FALSE
 }
+
+global.models <- fromJSON("~/repos/nij-crime-challenge/models/poisson/initial-weights.json")
+test.result <- data.frame(
+  cell_id = test.d$cell_id,
+  forecast_start = test.d$forecast_start)
+for(outcome in names(outcome.vars)) {
+  preds <- exp(as.matrix(test.d[, predictors]) %*% global.models[[outcome]])[, 1]
+  test.result[, outcome] <- test.d[, outcome]
+  test.result[, paste0("pred_", outcome)] <- preds
+}
+write.table(test.result, "~/repos/nij-crime-challenge/models/poisson/forecast-global.csv", 
+            row.names=FALSE, quote=FALSE, sep=",", col.names=TRUE)

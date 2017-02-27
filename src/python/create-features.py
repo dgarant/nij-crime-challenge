@@ -26,11 +26,37 @@ def main():
     process(feature_file, args.job_id, args.num_jobs)
 
 def process(feature_file, job_id, njobs):
+    crime_categories = set(["BURGLARY", "MOTOR VEHICLE THEFT", "STREET CRIMES", "OTHER"])
+    outcome_categories = set(["BURGLARY", "MOTOR VEHICLE THEFT", "STREET CRIMES", "ALL"])
+
     cell_ids = set()
+    total_crimes_by_category = defaultdict(int)
+    crimes_by_cell_category = dict()
     with open("../../models/cells/cells-dim-{0}-meta.csv".format(cell_dimension), "r") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
-            cell_ids.add(row["id"])
+            cell_id = row["id"]
+            cell_ids.add(cell_id)
+
+            crimes_by_cell_category[cell_id] = dict()
+            crimes_by_cell_category[cell_id]["ALL"] = int(row["num.crimes"])
+            crimes_by_cell_category[cell_id]["BURGLARY"] = int(row["num.crimes.BURGLARY"])
+            crimes_by_cell_category[cell_id]["MOTOR VEHICLE THEFT"] = int(row["num.crimes.MOTOR.VEHICLE.THEFT"])
+            crimes_by_cell_category[cell_id]["STREET CRIMES"] = int(row["num.crimes.STREET.CRIMES"])
+
+            for category, count in crimes_by_cell_category[cell_id].items():
+                total_crimes_by_category[category] += count
+
+    mean_crimes_by_category = dict()
+    for category, total in total_crimes_by_category.items():
+        mean_crimes_by_category[category] = total / len(cell_ids)
+
+    # mapping cell id and outcome category to pct of total crimes occurring in this cell
+    cell_pct_crime = dict() 
+    for cell_id, category_dict in crimes_by_cell_category.items():
+        cell_pct_crime[cell_id] = dict()
+        for category, count in category_dict.items():
+            cell_pct_crime[cell_id][category] = (count + 1) / (mean_crimes_by_category[category] + 1)
 
     # mapping iso-formatted date to weather info
     weather_by_date = dict()
@@ -50,8 +76,6 @@ def process(feature_file, job_id, njobs):
 
     data_start_date = None
     data_end_date = None
-    crime_categories = set(["BURGLARY", "MOTOR VEHICLE THEFT", "STREET CRIMES", "OTHER"])
-    outcome_categories = set(["BURGLARY", "MOTOR VEHICLE THEFT", "STREET CRIMES", "ALL"])
     outcome_index = defaultdict(lambda: defaultdict(int))
 
     with gzip.open("../../features/raw_crimes_cells_{0}.csv.gz".format(cell_dimension)) as gzfile:
@@ -66,7 +90,7 @@ def process(feature_file, job_id, njobs):
             if data_end_date is None or row["occ_date"] > data_end_date:
                 data_end_date = row["occ_date"]   
            
-# Generates all dates between from_date and to_date, inclusive
+    # Generates all dates between from_date and to_date, inclusive
     def date_generator(from_date, to_date):
         while from_date <= to_date:
             yield from_date
@@ -88,6 +112,7 @@ def process(feature_file, job_id, njobs):
           
     data_start_date = dparser.parse(data_start_date).date()
     data_end_date = dparser.parse(data_end_date).date()
+    study_end_date = dparser.parse("2017-03-01").date()
 
     writer = None
     with gzip.open(feature_file, "w+") as handle:
@@ -99,7 +124,7 @@ def process(feature_file, job_id, njobs):
             if int(cellid) % (100 + job_id) == 0:
                 print("J{0} {1}: Working on cell {2}".format(job_id, datetime.datetime.now().isoformat(), cellid))
 
-            for forecast_start in date_generator(data_start_date + relativedelta(years=1), data_end_date):
+            for forecast_start in date_generator(data_start_date + relativedelta(years=1), study_end_date):
                 # try to eliminate some autocorrelation by 
                 # keeping only the 1st and 15th as starting dates
                 if forecast_start.day != 1 and forecast_start.day != 15:
@@ -116,8 +141,12 @@ def process(feature_file, job_id, njobs):
                 # outcomes
                 for day_window in DAY_WINDOWS:
                     edate = forecast_start + datetime.timedelta(days=day_window)
-                    cur_outcomes = crimes_in_window(cellid, forecast_start, edate, outcome_index)
+                    if edate > data_end_date:
+                        cur_outcomes = defaultdict(lambda: None)
+                    else:
+                        cur_outcomes = crimes_in_window(cellid, forecast_start, edate, outcome_index)
                     store_outcomes(cur_outcomes, "{0}days".format(day_window))
+
                 
                 def store_count_features(count_dict, time_window):
                     for category in crime_categories:
@@ -125,13 +154,17 @@ def process(feature_file, job_id, njobs):
                 
                 for month_num in range(1, 13):
                     cur_features["p_start_month_{0}".format(month_num)] = int(month_num == forecast_start.month)
+
+                # percentage of crime in each category
+                for category, pct in cell_pct_crime[cellid].items():
+                    cur_features["p_pct_crime_{0}".format(category)] = pct
                 
                 # St. Patrick's day
                 for day_window in DAY_WINDOWS:
                     forecast_end_date = forecast_start + datetime.timedelta(days=day_window)
                     forecast_end_year = forecast_end_date.year
                     sp_day = datetime.date(forecast_end_year, 3, 17)
-                    cur_features["sp_within_{0}days".format(day_window)] = int(sp_day >= forecast_start and sp_day <= forecast_end_date)
+                    cur_features["p_sp_within_{0}days".format(day_window)] = int(sp_day >= forecast_start and sp_day <= forecast_end_date)
 
                 # daily counts
                 for delta_days in range(3, 8):
@@ -174,16 +207,15 @@ def process(feature_file, job_id, njobs):
                             num_fridays += 1
                         if d.weekday() == 3:
                             num_thursdays += 1
-                        if d.weekday() == 2:
+                        if d.weekday() == 1:
                             num_tuesdays += 1
-                    cur_features["num_saturdays_next{0}days".format(day_window)] = num_saturdays
-                    cur_features["num_fridays_next{0}days".format(day_window)] = num_fridays
-                    cur_features["num_thursdays_next{0}days".format(day_window)] = num_thursdays
-                    cur_features["num_tuesdays_next{0}days".format(day_window)] = num_tuesdays
+                    cur_features["p_num_saturdays_next{0}days".format(day_window)] = num_saturdays
+                    cur_features["p_num_fridays_next{0}days".format(day_window)] = num_fridays
+                    cur_features["p_num_thursdays_next{0}days".format(day_window)] = num_thursdays
+                    cur_features["p_num_tuesdays_next{0}days".format(day_window)] = num_tuesdays
                     
-
                 # weather:
-                for day_delta in [7, -7, -14, -30]:
+                for day_delta in [6, -7, -14, -30]:
                     window_start, window_end = sorted([forecast_start, 
                         forecast_start + datetime.timedelta(days=day_delta)])
 

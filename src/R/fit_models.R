@@ -8,7 +8,6 @@ library(data.table)
 cat("Reading data\n")
 d <- fread("gzcat ~/repos/nij-crime-challenge/features/processed-features-550.csv.gz", data.table=FALSE, check.names=TRUE)
 
-
 outcome.vars <- list()
 for(window in c(7, 14, 30, 61, 91)) {
   for(type in c("BURGLARY", "ALL", "STREET CRIMES", "MOTOR VEHICLE THEFT")) {
@@ -24,6 +23,7 @@ train.d <- subset(d, istrain == 1)
 test.d <- subset(d, istrain == 0)
 
 weights.path <- "~/repos/nij-crime-challenge/models/poisson/initial-weights.json"
+if(!file.exists(weights.path)) {
   init.weights <- list()
   for(outcome in names(outcome.vars)) {
     cat("Fitting global model of ", outcome, "\n")
@@ -66,8 +66,7 @@ for(grecs in split.train) {
     outcome.formula <- as.formula(paste0(outcome, "~", paste0(cur.predictors, collapse=" + "), " - 1"))
     
     omodel <- tryCatch({
-      pmodel <- glm(outcome.formula, data=grecs, 
-                    start=init.weights[[outcome]][1:length(cur.predictors)], family="poisson")
+      pmodel <- glm(outcome.formula, data=grecs, family="poisson")
       pred.counts <- predict(pmodel, test.recs, type="response")
       rmse <- sqrt(mean((pred.counts - test.recs[, outcome]))** 2)
       nrmse <- rmse / mean(grecs[, outcome])
@@ -85,6 +84,19 @@ for(grecs in split.train) {
       print(e)
       cat("\tCould not fit model to ", outcome, ", using mean\n")
       return(mmodel)
+    }, warning=function(e) {
+      print(e)
+      if(sum(grecs[, outcome]) > 100 && str_detect(e$message, "converge")) {
+        stop("convergence problem with lots of non-zero cases")
+      }
+      return(list(model_type = unbox("poisson"), 
+                  "median_value" = unbox(distr.stats["50%"]), 
+                  "mean_value" = unbox(mean(grecs[, outcome])), 
+                  domain = unique(grecs[, outcome]),
+                  "coeffs" = coefficients(pmodel),
+                  "bw" = bw.estimates,
+                  "rmse" = unbox(rmse),
+                  "nrmse" = unbox(nrmse)))
     })
     
     outcome.models[[groupid]][[outcome.vars[[outcome]]]] <- omodel

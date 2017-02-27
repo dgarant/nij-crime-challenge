@@ -12,4 +12,4 @@ models/mrf/nb-groups/
 models/mrf/nb-individuals/
 models/mrf/mrf-structure*.p
 models/mrf/forecasts/*
-models/poisson/forecast.csv
+models/poisson/forecast*
