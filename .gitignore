@@ -14,3 +14,4 @@ models/mrf/mrf-structure*.p
 models/mrf/forecasts/*
 models/poisson/GARANTANALYTICS.zip
 models/poisson/forecast*
+models/mrf/transformer.p
