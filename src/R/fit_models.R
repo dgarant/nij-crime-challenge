@@ -31,7 +31,7 @@ if(!file.exists(weights.path)) {
     init.weights[[outcome]] <- coefficients(glm(outcome.formula, data=train.d, family="poisson"))
   }
   
-  conn <- file()
+  conn <- file(weights.path)
   jweights <- toJSON(init.weights, pretty=TRUE)
   writeLines(jweights, conn)
   close(conn)
