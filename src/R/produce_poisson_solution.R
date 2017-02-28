@@ -9,8 +9,8 @@ library(maptools)
 library(rgdal)
 library(rgeos)
 
-global.forecast <- fread("~/repos/nij-crime-challenge/models/poisson/forecast-global.csv", data.table=FALSE)
-indiv.forecast <- fread("~/repos/nij-crime-challenge/models/poisson/forecast.csv", data.table=FALSE)
+global.forecast <- subset(fread("~/repos/nij-crime-challenge/models/poisson/forecast-global.csv", data.table=FALSE), istrain == 0)
+indiv.forecast <- subset(fread("~/repos/nij-crime-challenge/models/poisson/forecast.csv", data.table=FALSE), istrain == 0)
 
 predictors <- colnames(global.forecast)[str_detect(colnames(global.forecast), "pred_")]
 pforecast <- merge(indiv.forecast, global.forecast[, c("cell_id", "forecast_start", predictors)], 
