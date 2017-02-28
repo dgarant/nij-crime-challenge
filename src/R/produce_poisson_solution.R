@@ -153,6 +153,7 @@ target.forecast <- subset(cell.outcomes, forecast_start == output.date)
 projection <- CRS("+proj=lcc +lat_1=44.33333333333334 +lat_2=46 +lat_0=43.66666666666666 +lon_0=-120.5 +x_0=2500000 +y_0=0 +ellps=GRS80 +units=ft +no_defs")
 cells <- readShapePoly("~/repos/nij-crime-challenge/models/cells/cells-dim-550.shp", proj4string=projection)
 
+orig.data <- data.frame(cells@data)
 for(type in names(output.dirs)) {
   for(window in names(output.windows)) {
     current.dir <- file.path(base.dir, type, window)
@@ -169,9 +170,9 @@ for(type in names(output.dirs)) {
     cat("\tTotal area: ", area.sqmi, "sq mi\n")
     cat("\tNum forecast crimes:", sum(ranked.forecast$pred), "\n")
     cat("\tShould be NA:", max(ranked.forecast$actual), "\n")
-    cells@data <- data.frame(id=cells@data$id, area=round(cells@data$area, 4), 
-                             hotspot=as.integer(cells@data$id %in% ranked.forecast$cell_id))
-    rownames(cells@data) <- cells@data$id
+    cells@data <- data.frame(Id=orig.data$id, area=round(orig.data$area, 4), 
+                             hotspot=as.integer(orig.data$id %in% ranked.forecast$cell_id))
+    rownames(cells@data) <- orig.data$id
     
     if(area.sqmi < 0.26 || area.sqmi > 0.71) {
       stop("bad area")
